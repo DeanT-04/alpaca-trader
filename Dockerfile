@@ -8,9 +8,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy dependency files
-COPY pyproject.toml README.md ./
+COPY requirements.txt setup.py README.md ./
 
 # Install python dependencies
+RUN pip install --no-cache-dir -r requirements.txt
 RUN pip install --no-cache-dir .
 
 # Copy source code

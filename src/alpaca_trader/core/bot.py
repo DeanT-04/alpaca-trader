@@ -74,40 +74,47 @@ class AlpacaBot:
             return
 
         logger.debug("Scanning for news...")
-        # Poll news for watchlist symbols
-        # Note: API limit on symbols list len is usually 50?? check docs.
-        # We'll query ALL news and filter in memory if list is too big, 
-        # OR chunk updates. For MVP, querying recent 'all' news and filtering is safer.
         
         try:
             req = NewsRequest(
                 limit=50,
                 start=self.last_news_poll,
-                include_content=True # Need partial content for keywords?
-                # symbols=list(self.watchlist) # Optional: filter server side
+                include_content=True
             )
-            data = self.news_client.get_news(req)
-            self.last_news_poll = datetime.now() # Reset high watermark
-
-            # Robustly fetch news list from the response object
-            news_items = []
             
-            # Case 1: Standard Pydantic model with .news
-            if hasattr(data, 'news'):
-                news_items = data.news
-            # Case 2: Nested data attribute (observed in debug: response.data -> dict -> list)
-            elif hasattr(data, 'data'):
-                inner_data = data.data
-                if isinstance(inner_data, dict):
-                    news_items = inner_data.get('news', [])
-                elif hasattr(inner_data, 'news'):
-                     news_items = inner_data.news
-            # Case 3: It IS the list (or iterable directly)
-            elif isinstance(data, list):
-                news_items = data
+            # Fetch news
+            response = self.news_client.get_news(req)
+            self.last_news_poll = datetime.now() # Reset high watermark
+            
+            news_items = []
+
+            # Determine response structure
+            if hasattr(response, 'news'):
+                # Handle NewsSet with .news attribute
+                # Check if .news is a dict or list
+                if isinstance(response.news, dict):
+                    # Sometimes it's a dict with ids?
+                    news_items = list(response.news.values())
+                else:
+                    news_items = response.news
+            elif isinstance(response, list):
+                 news_items = response
+            elif hasattr(response, '__iter__'):
+                # Convertible to list?
+                news_items = list(response)
+            elif hasattr(response, 'data'):
+                # Nested data
+                inner = response.data
+                if hasattr(inner, 'news'):
+                    news_items = inner.news
+                elif isinstance(inner, dict):
+                    news_items = inner.get('news', [])
 
             if not news_items:
+                logger.debug("No news items found")
                 return
+
+            logger.info(f"Found {len(news_items)} news items")
 
             for item in news_items:
                 # Helper to access fields whether item is dict or object
@@ -117,14 +124,10 @@ class AlpacaBot:
                     return getattr(obj, field, default)
 
                 # Convert to our clean model
-                # ID might be integer
-                raw_id = get_field(item, 'id')
-                raw_symbols = get_field(item, 'symbols', [])
-                
                 article = NewsArticle(
-                    id=str(raw_id),
+                    id=str(get_field(item, 'id')),
                     headline=get_field(item, 'headline', 'No Headline'),
-                    symbol=raw_symbols[0] if raw_symbols else "UNKNOWN", 
+                    symbol=get_field(item, 'symbols', ['UNKNOWN'])[0] if get_field(item, 'symbols') else "UNKNOWN",
                     source=get_field(item, 'source', 'Unknown'),
                     created_at=get_field(item, 'created_at', datetime.now()),
                     summary=get_field(item, 'summary', ''),
@@ -132,9 +135,9 @@ class AlpacaBot:
                 )
                 
                 # Check Watchlist
-                # News API often returns multiple symbols. 
-                # We check if ANY of the article's symbols are in our watchlist.
-                # Use raw_symbols which we already extracted safely
+                logger.info("News Discovered", headline=article.headline, symbol=article.symbol, created_at=str(article.created_at))
+                
+                raw_symbols = get_field(item, 'symbols', [])
                 relevant_symbols = [s for s in raw_symbols if s in self.watchlist]
                 if not relevant_symbols:
                     continue
@@ -147,7 +150,7 @@ class AlpacaBot:
                     self.execute_signal(valid_article.symbol)
 
         except Exception as e:
-            logger.error("News Poll Failed", error=str(e))
+            logger.exception("News Poll Failed", error=str(e))
 
     def execute_signal(self, symbol: str):
         """Execute buy on valid signal."""

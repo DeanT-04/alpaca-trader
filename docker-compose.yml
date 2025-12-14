@@ -1,0 +1,12 @@
+services:
+  app:
+    build: .
+    image: alpaca-trader:latest
+    container_name: alpaca-trader
+    env_file:
+      - .env
+    restart: unless-stopped
+    volumes:
+      - ./logs:/app/logs
+    # Keep the container running if it crashes?
+    # restart: on-failure
